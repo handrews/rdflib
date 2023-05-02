@@ -4,6 +4,9 @@ some more specific Literal tests are in test_literal.py
 
 import base64
 import random
+from unittest.mock import MagicMock, call
+
+import pytest
 
 from rdflib.graph import Graph, QuotedGraph
 from rdflib.namespace import XSD
@@ -33,6 +36,46 @@ class TestURIRefRepr:
         a = u > BNode()
         a = u > QuotedGraph(g.store, u)
         a = u > g
+
+
+class TestURIRefValidation:
+    GOOD_URI = "https://example.com/foo"
+
+    @pytest.mark.parametrize(
+        "char",
+        ("<", ">", '"', "{", "}", "|", "\\", "`", "^"),
+    )
+    def test_default_validation(self, char):
+        u = URIRef(f"https://example.com/a{char}z")
+        with pytest.raises(ValueError, match="does not look like a valid URI"):
+            u.n3()
+
+    def test_strict_validation(self):
+        with pytest.raises(ValueError, match="does not look like a valid URI"):
+            URIRef("https://example.com/^", strict=True)
+
+    def test_custom_validator(self):
+        with pytest.raises(ValueError, match="does not look like a valid URI"):
+            URIRef(
+                "http://example.com/",
+                validator=lambda u: u.startswith("https://"),
+                strict=True,
+            )
+
+    @pytest.mark.parametrize(
+        "strict, calls",
+        (
+            # Note that URIRef.__new__() validates the input string,
+            # whils URIRef.n3() validates self.
+            (True, [call(GOOD_URI)]),
+            (False, [call(GOOD_URI), call(URIRef(GOOD_URI))]),
+        ),
+    )
+    def test_validator_call_pattern(self, strict, calls):
+        mock_validator = MagicMock(return_value=True)
+        u = URIRef(self.GOOD_URI, validator=mock_validator, strict=strict)
+        u.n3()
+        assert mock_validator.mock_calls == calls
 
 
 class TestBNodeRepr:

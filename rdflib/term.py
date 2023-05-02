@@ -256,6 +256,19 @@ class URIRef(IdentifiedNode):
     IRIs in the RDF abstract syntax MUST be absolute, and MAY contain a fragment identifier.
 
     IRIs are a generalization of URIs [RFC3986] that permits a wider range of Unicode characters.
+
+    :param value: The URI-reference string.
+    :param base: An optional base URI against which ``value`` will be resolved.
+    :param validator: A callable to check the validity of the resolved URI-reference.
+        The default validator essentially just makes sure that the string includes
+        no illegal characters (``<, >, ", {, }, |, \\, `, ^``).  Validation can be
+        effectively disabled by passing a callable that always returns ``True``,
+        however this can result in unexpected serialization errors.
+    :param string: If ``True``, raise an exception the ``validator`` check fails
+        in this method, and skip the check during serialization.  If ``False``
+        (the default), log a warning if the constructor check fails, and run
+        the check again during serialization.
+    :raises ValueError: if ``strict`` is ``True`` and the ``validator`` check fails.
     """
 
     __slots__ = ()
@@ -265,7 +278,13 @@ class URIRef(IdentifiedNode):
     __neg__: Callable[["URIRef"], "NegatedPath"]
     __truediv__: Callable[["URIRef", Union["URIRef", "Path"]], "SequencePath"]
 
-    def __new__(cls, value: str, base: Optional[str] = None) -> "URIRef":
+    def __new__(
+        cls,
+        value: str,
+        base: Optional[str] = None,
+        validator: Callable[[str], bool] = _is_valid_uri,
+        strict: bool = False,
+    ) -> "URIRef":
         if base is not None:
             ends_in_hash = value.endswith("#")
             # type error: Argument "allow_fragments" to "urljoin" has incompatible type "int"; expected "bool"
@@ -274,11 +293,11 @@ class URIRef(IdentifiedNode):
                 if not value.endswith("#"):
                     value += "#"
 
-        if not _is_valid_uri(value):
-            logger.warning(
-                "%s does not look like a valid URI, trying to serialize this will break."
-                % value
-            )
+        if not validator(value):
+            not_valid = '"%s" does not look like a valid URI' % value
+            if strict:
+                raise ValueError("%s. Perhaps you wanted to urlencode it?" % not_valid)
+            logger.warning("%s, trying to serialize this will break." % not_valid)
 
         try:
             rt = str.__new__(cls, value)
@@ -287,18 +306,29 @@ class URIRef(IdentifiedNode):
             rt = str.__new__(cls, value, "utf-8")  # type: ignore[call-overload]
         return rt
 
+    def __init__(
+        self,
+        value: str,
+        base: Optional[str] = None,
+        validator: Callable[[str], bool] = _is_valid_uri,
+        strict: bool = False,
+    ) -> None:
+        self._validator: Callable[[str], bool] = validator
+        self._strict: bool = strict
+
     def n3(self, namespace_manager: Optional["NamespaceManager"] = None) -> str:
         """
-        This will do a limited check for valid URIs,
-        essentially just making sure that the string includes no illegal
-        characters (``<, >, ", {, }, |, \\, `, ^``)
+        This will check URI validity using the validator passed to :meth:`__new__`,
+        unless the constructor was called with ``strict=True``, in which case
+        the value is already guaranteed to be valid..
 
         :param namespace_manager: if not None, will be used to make up
              a prefixed name
+        :raises ValueError: if the URI validity check is run and fails
         """
 
-        if not _is_valid_uri(self):
-            raise Exception(
+        if not self._strict and not self._validator(self):
+            raise ValueError(
                 '"%s" does not look like a valid URI, I cannot serialize this as N3/Turtle. Perhaps you wanted to urlencode it?'
                 % self
             )
